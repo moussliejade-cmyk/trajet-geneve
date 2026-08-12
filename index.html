@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
-<title>Trajet — Vieugy ↔ Genève</title>
+<title>BlablaJade</title>
 <meta name="theme-color" content="#2a78d6">
 <meta name="mobile-web-app-capable" content="yes">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
@@ -768,11 +768,19 @@ document.querySelectorAll('#journalViewSeg .seg-btn').forEach(btn => {
 });
 
 // ---------- Card builders ----------
-function vehicleCardsHTML(current, i) {
+// Chaque jour a un trajet principal (les champs directement sur la ligne du Journal) et,
+// optionnellement, des trajets supplémentaires (row.extraTrips[]) pour le même jour — par ex.
+// rentrer du travail puis ressortir en loisir. Le paramètre `t` adresse la cible d'un champ :
+// 'main' pour le trajet principal, ou un index numérique pour extraTrips[t].
+function tripTarget(i, t) {
+  if (t === undefined || t === null || t === 'main') return dailyLog[i];
+  return (dailyLog[i].extraTrips || [])[+t];
+}
+function vehicleCardsHTML(current, i, t) {
   return `<div class="pill-group-lbl">Véhicule</div>
   <div class="vehicle-cards">
     ${vehicles.map((v,idx) => `
-      <div class="vehicle-card ${current===v.id?'active':''} ${idx%2===1?'alt':''}" data-i="${i}" data-f="vehicle" data-v="${v.id}">
+      <div class="vehicle-card ${current===v.id?'active':''} ${idx%2===1?'alt':''}" data-i="${i}" data-t="${t}" data-f="vehicle" data-v="${v.id}">
         <div class="vcheck">✓</div>
         ${v.photo ? `<img class="vphoto" src="${v.photo}" alt="${v.id}">` : `<div class="vphoto" style="display:flex;align-items:center;justify-content:center;font-size:26px;">🚗</div>`}
         <div class="vinfo"><div class="vname">${v.label}</div><div class="vsub">${v.sub||''}</div></div>
@@ -822,16 +830,16 @@ function animateRouteTraces(scope) {
     });
   });
 }
-function routeRowHTML(current, i, field, list, label) {
+function routeRowHTML(current, i, field, list, label, t) {
   return `<div class="pill-group-lbl">${label}</div>
   <div class="pill-row">
-    ${list.map(r => `<span class="pill ${current===r.v?'active':''}" data-i="${i}" data-f="${field}" data-v="${r.v}">${r.ic} ${r.v}</span>`).join('')}
+    ${list.map(r => `<span class="pill ${current===r.v?'active':''}" data-i="${i}" data-t="${t}" data-f="${field}" data-v="${r.v}">${r.ic} ${r.v}</span>`).join('')}
   </div>`;
 }
-function countRowHTML(groupLbl, current, i, field) {
+function countRowHTML(groupLbl, current, i, field, t) {
   return `<div class="pill-group-lbl">${groupLbl}</div>
   <div class="pill-row">
-    ${COVOIT_OPTS.map(opt => `<span class="pill count ${current===opt?'active':''}" data-i="${i}" data-f="${field}" data-v="${opt}">${opt}</span>`).join('')}
+    ${COVOIT_OPTS.map(opt => `<span class="pill count ${current===opt?'active':''}" data-i="${i}" data-t="${t}" data-f="${field}" data-v="${opt}">${opt}</span>`).join('')}
   </div>`;
 }
 function dayCostHTML(row) {
@@ -848,60 +856,77 @@ function dayCostHTML(row) {
     <span>Total : <b class="${cls}" style="${cls==='good'?'color:var(--good)':cls==='warn'?'color:var(--critical)':''}">${fmt(total)}</b></span>
   </div>`;
 }
-function autreFieldsHTML(row, i, field) {
+function autreFieldsHTML(row, i, field, t) {
   const kmField = field === 'routeAller' ? 'routeAllerAutreKm' : 'routeRetourAutreKm';
   const coutField = field === 'routeAller' ? 'routeAllerAutreCout' : 'routeRetourAutreCout';
   return `<div class="day-cost-row" style="margin-top:6px;">
     <label style="flex:1;min-width:100px;">Km parcourus
-      <input type="number" class="autre-field" data-i="${i}" data-f="${kmField}" value="${row[kmField]||0}" step="1"
+      <input type="number" class="autre-field" data-i="${i}" data-t="${t}" data-f="${kmField}" value="${row[kmField]||0}" step="1"
         style="width:100%;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;padding:6px 8px;margin-top:3px;color:var(--text-primary);">
     </label>
     <label style="flex:1;min-width:100px;">Coût péage (€)
-      <input type="number" class="autre-field" data-i="${i}" data-f="${coutField}" value="${row[coutField]||''}" step="0.10"
+      <input type="number" class="autre-field" data-i="${i}" data-t="${t}" data-f="${coutField}" value="${row[coutField]||''}" step="0.10"
         style="width:100%;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;padding:6px 8px;margin-top:3px;color:var(--text-primary);">
     </label>
   </div>`;
 }
-function dayTypeRowHTML(current, i) {
+function dayTypeRowHTML(current, i, t) {
   const opts = [ {v:'travail', ic:'💼', lbl:'Travail'}, {v:'loisir', ic:'🌿', lbl:'Loisir'} ];
   const cur = current || 'travail';
   return `<div class="pill-group-lbl">Type de trajet</div>
   <div class="pill-row">
-    ${opts.map(o => `<span class="pill ${cur===o.v?'active':''}" data-i="${i}" data-f="dayType" data-v="${o.v}">${o.ic} ${o.lbl}</span>`).join('')}
+    ${opts.map(o => `<span class="pill ${cur===o.v?'active':''}" data-i="${i}" data-t="${t}" data-f="dayType" data-v="${o.v}">${o.ic} ${o.lbl}</span>`).join('')}
   </div>`;
 }
-function loisirFieldsHTML(row, i) {
+function loisirFieldsHTML(row, i, t) {
   const km = row.loisirKm || 0;
   const cout = row.loisirCout || '';
   return `<p class="muted" style="margin:2px 4px 6px;">Trajet loisir : indique directement le kilométrage prévu et le coût d'autoroute, sans passer par les routes du commute.</p>
   <div class="day-cost-row" style="margin-top:6px;">
     <label style="flex:1;min-width:100px;">Km prévus (trajet complet)
-      <input type="number" class="autre-field" data-i="${i}" data-f="loisirKm" value="${km}" step="1"
+      <input type="number" class="autre-field" data-i="${i}" data-t="${t}" data-f="loisirKm" value="${km}" step="1"
         style="width:100%;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;padding:6px 8px;margin-top:3px;color:var(--text-primary);">
     </label>
     <label style="flex:1;min-width:100px;">Coût autoroute (€)
-      <input type="number" class="autre-field" data-i="${i}" data-f="loisirCout" value="${cout}" step="0.10"
+      <input type="number" class="autre-field" data-i="${i}" data-t="${t}" data-f="loisirCout" value="${cout}" step="0.10"
         style="width:100%;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;padding:6px 8px;margin-top:3px;color:var(--text-primary);">
     </label>
   </div>`;
 }
-function travailFieldsHTML(row, i) {
+function travailFieldsHTML(row, i, t) {
   return `
     ${routeTraceHTML(row)}
-    ${routeRowHTML(row.routeAller, i, 'routeAller', ROUTES_ALLER, 'Route aller')}
-    ${row.routeAller === 'Autre' ? autreFieldsHTML(row, i, 'routeAller') : ''}
-    ${routeRowHTML(row.routeRetour, i, 'routeRetour', ROUTES_RETOUR, 'Route retour')}
-    ${row.routeRetour === 'Autre' ? autreFieldsHTML(row, i, 'routeRetour') : ''}
+    ${routeRowHTML(row.routeAller, i, 'routeAller', ROUTES_ALLER, 'Route aller', t)}
+    ${row.routeAller === 'Autre' ? autreFieldsHTML(row, i, 'routeAller', t) : ''}
+    ${routeRowHTML(row.routeRetour, i, 'routeRetour', ROUTES_RETOUR, 'Route retour', t)}
+    ${row.routeRetour === 'Autre' ? autreFieldsHTML(row, i, 'routeRetour', t) : ''}
     ${dayCostHTML(row)}
-    ${countRowHTML("Covoitureurs à l'aller", row.covAller, i, 'covAller')}
-    ${countRowHTML('Covoitureurs au retour', row.covRetour, i, 'covRetour')}
+    ${countRowHTML("Covoitureurs à l'aller", row.covAller, i, 'covAller', t)}
+    ${countRowHTML('Covoitureurs au retour', row.covRetour, i, 'covRetour', t)}
+  `;
+}
+function tripCardHTML(trip, i, t) {
+  return `
+    ${vehicleCardsHTML(trip.vehicle, i, t)}
+    ${dayTypeRowHTML(trip.dayType, i, t)}
+    ${trip.dayType === 'loisir' ? loisirFieldsHTML(trip, i, t) : travailFieldsHTML(trip, i, t)}
   `;
 }
 function dayCardBody(row, i) {
+  const extra = row.extraTrips || [];
   return `
-    ${vehicleCardsHTML(row.vehicle, i)}
-    ${dayTypeRowHTML(row.dayType, i)}
-    ${row.dayType === 'loisir' ? loisirFieldsHTML(row, i) : travailFieldsHTML(row, i)}
+    <div class="pill-group-lbl" style="margin-top:0;opacity:.7;">Trajet principal</div>
+    ${tripCardHTML(row, i, 'main')}
+    ${extra.map((trip, idx) => `
+      <div class="extra-trip-block" style="margin-top:16px;padding-top:14px;border-top:1px dashed var(--border);">
+        <div class="pill-group-lbl" style="margin-top:0;display:flex;justify-content:space-between;align-items:center;opacity:.7;">
+          <span>Trajet supplémentaire ${idx+1}</span>
+          <button class="del-x" data-delextra="${i}:${idx}">✕</button>
+        </div>
+        ${tripCardHTML(trip, i, idx)}
+      </div>
+    `).join('')}
+    <button class="add-btn" data-addextra="${i}" style="margin:14px 4px 0;width:calc(100% - 8px);">+ Ajouter un trajet ce jour-là</button>
   `;
 }
 function bindDayInputs(scope) {
@@ -909,7 +934,9 @@ function bindDayInputs(scope) {
     inp.addEventListener('change', e => {
       const el = e.currentTarget;
       const i = +el.dataset.i, f = el.dataset.f;
-      dailyLog[i][f] = el.value === '' ? '' : parseFloat(el.value);
+      const target = tripTarget(i, el.dataset.t);
+      if (!target) return;
+      target[f] = el.value === '' ? '' : parseFloat(el.value);
       renderAll();
     });
   });
@@ -919,7 +946,25 @@ function bindDayInputs(scope) {
       const i = +el.dataset.i, f = el.dataset.f;
       let v = el.dataset.v;
       if (f === 'covAller' || f === 'covRetour') v = Number(v);
-      dailyLog[i][f] = v;
+      const target = tripTarget(i, el.dataset.t);
+      if (!target) return;
+      target[f] = v;
+      renderAll();
+    });
+  });
+  scope.querySelectorAll('[data-addextra]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const i = +e.currentTarget.dataset.addextra;
+      dailyLog[i].extraTrips = dailyLog[i].extraTrips || [];
+      dailyLog[i].extraTrips.push({ vehicle: dailyLog[i].vehicle || null, dayType: 'loisir', loisirKm: 0, loisirCout: '', covAller: 0, covRetour: 0 });
+      renderAll();
+    });
+  });
+  scope.querySelectorAll('[data-delextra]').forEach(btn => {
+    btn.addEventListener('click', e => {
+      const [iStr, idxStr] = e.currentTarget.dataset.delextra.split(':');
+      const i = +iStr, idx = +idxStr;
+      if (dailyLog[i] && dailyLog[i].extraTrips) dailyLog[i].extraTrips.splice(idx, 1);
       renderAll();
     });
   });
@@ -1006,8 +1051,8 @@ document.getElementById('addDayBtn').addEventListener('click', () => {
 function autoCovoitTripsRevenue(covoitEur, sinceDate) {
   // Revenu covoiturage réel calculé automatiquement à partir des trajets confirmés du Journal
   // (au taux configuré), pour ne plus dépendre d'une saisie manuelle qui peut être oubliée.
-  const rows = dailyLog.filter(r => !r.forecast && isTravail(r) && (!sinceDate || r.date > sinceDate));
-  const legs = rows.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0), 0);
+  const trips = allTripsWithMeta().filter(t => !t.forecast && isTravail(t) && (!sinceDate || t.date > sinceDate));
+  const legs = trips.reduce((s,t)=>s+((t.covAller>0)?1:0)+((t.covRetour>0)?1:0), 0);
   return legs * covoitEur;
 }
 function getParams() {
@@ -1034,6 +1079,17 @@ const RING_CIRC = 2 * Math.PI * 44;
 function monthRowsFor(dateISO) {
   const ym = dateISO.slice(0,7);
   return dailyLog.filter(r => r.date && r.date.slice(0,7) === ym);
+}
+// Aplati chaque jour en trajet(s) individuels (principal + supplémentaires) pour les calculs
+// agrégés (km, dépenses, covoiturage) — chaque trajet supplémentaire hérite de la date/du statut
+// prévisionnel de son jour, mais garde son propre véhicule/type/route/km-loisir/covoiturage.
+function allTripsWithMeta() {
+  const out = [];
+  dailyLog.forEach(r => {
+    out.push(r);
+    (r.extraTrips||[]).forEach(t => out.push(Object.assign({}, t, { date: r.date, forecast: r.forecast })));
+  });
+  return out;
 }
 function computeAll() {
   const P = getParams();
@@ -1134,9 +1190,9 @@ function computeAll() {
       }
       v._chartData = { labels, budgetLine, realSeries, moisEcoules };
     } else {
-      const daysAll = dailyLog.filter(r => r.vehicle === v.id);
-      const daysConfirmed = daysAll.filter(r => !r.forecast);
-      const kmEstimeJournal = daysConfirmed.reduce((s,r)=>s+dayKmDriven(r, distAR), 0);
+      const tripsAll = allTripsWithMeta().filter(t => t.vehicle === v.id);
+      const daysConfirmed = tripsAll.filter(t => !t.forecast);
+      const kmEstimeJournal = daysConfirmed.reduce((s,t)=>s+dayKmDriven(t, distAR), 0);
       const fuelReelTotal = fuelSpentForVehicle(v.id, null);
       const coutTotal = fuelReelTotal > 0 ? fuelReelTotal : (v.kmFait||0) * eurKm;
       const el = document.getElementById('kpis_'+v.id);
@@ -1153,8 +1209,8 @@ function computeAll() {
   // --- Profil : récap covoiturage (ce mois-ci) ---
   const nowISO = todayISO();
   const nowYm = nowISO.slice(0,7);
-  const monthRows = monthRowsFor(nowISO);
-  const monthConfirmed = monthRows.filter(r => !r.forecast);
+  const monthTrips = allTripsWithMeta().filter(t => t.date && t.date.slice(0,7) === nowYm);
+  const monthConfirmed = monthTrips.filter(t => !t.forecast);
   const kmMoisTotal = monthConfirmed.reduce((s,r)=>s+dayKmDriven(r, distAR), 0);
   let depensesMoisTotal = 0;
   vehicles.forEach(v => {
@@ -1403,8 +1459,8 @@ function renderHeroCards() {
   const P = getParams();
   const distAR = P.dist + P.distRetour;
   const ym = todayISO().slice(0,7);
-  const monthRows = dailyLog.filter(r => r.date && r.date.slice(0,7) === ym);
-  const monthConfirmed = monthRows.filter(r => !r.forecast);
+  const monthTrips = allTripsWithMeta().filter(t => t.date && t.date.slice(0,7) === ym);
+  const monthConfirmed = monthTrips.filter(t => !t.forecast);
 
   const kmCards = vehicles.map(v => {
     const rowsVeh = monthConfirmed.filter(r => r.vehicle === v.id);
