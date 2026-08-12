@@ -760,12 +760,19 @@ function computeAll() {
     if (m <= Math.floor(moisEcoules)) { realSeries.push(m === Math.floor(moisEcoules) ? Math.round(P.lldFait) : null); }
     else { realSeries.push(Math.round(P.lldFait + rythmeActuel*(m-moisEcoules))); }
   }
-  if (kmChart) kmChart.destroy();
   const rootStyle = getComputedStyle(document.body);
   const cGrid = rootStyle.getPropertyValue('--grid').trim();
   const cMuted = rootStyle.getPropertyValue('--text-muted').trim();
   const s1 = rootStyle.getPropertyValue('--series-1').trim();
   const s2 = rootStyle.getPropertyValue('--series-2').trim();
+  if (typeof Chart === 'undefined') {
+    // Chart.js failed to load (ex. connexion instable) — on n'affiche pas les graphiques,
+    // mais tout le reste (KPIs, journal, sauvegarde) continue de fonctionner normalement.
+    document.getElementById('kmChart').closest('.chart-box').innerHTML = '<p class="muted" style="padding-top:60px;text-align:center;">Graphique indisponible (connexion internet requise pour le charger)</p>';
+    document.getElementById('costChart').closest('.chart-box').innerHTML = '<p class="muted" style="padding-top:60px;text-align:center;">Graphique indisponible (connexion internet requise pour le charger)</p>';
+    return;
+  }
+  if (kmChart) kmChart.destroy();
   kmChart = new Chart(document.getElementById('kmChart'), {
     type:'line',
     data: { labels, datasets: [
@@ -875,7 +882,13 @@ function renderCalDayDetail() {
 document.getElementById('calPrev').addEventListener('click', () => { calCursor.setMonth(calCursor.getMonth()-1); renderCalendar(); });
 document.getElementById('calNext').addEventListener('click', () => { calCursor.setMonth(calCursor.getMonth()+1); renderCalendar(); });
 
-function renderAll() { renderTodayCard(); renderJournalList(); renderCalendar(); computeAll(); saveState(); }
+function renderAll() {
+  // saveState() first and unconditionally: a chart rendering failure (ex. Chart.js
+  // failed to load over a flaky mobile connection) must never block saving the data.
+  saveState();
+  renderTodayCard(); renderJournalList(); renderCalendar();
+  try { computeAll(); } catch (e) { console.warn('computeAll failed (data was still saved):', e); }
+}
 
 document.getElementById('recalcBtn').addEventListener('click', renderAll);
 function toggleTheme() {
@@ -884,8 +897,8 @@ function toggleTheme() {
   const isDark = cur === 'dark';
   if (isDark) root.removeAttribute('data-theme'); else root.setAttribute('data-theme','dark');
   document.getElementById('themeToggle').textContent = isDark ? '🌙' : '☀️';
-  computeAll();
   saveState();
+  try { computeAll(); } catch (e) { console.warn('computeAll failed (data was still saved):', e); }
 }
 document.getElementById('themeToggle').addEventListener('click', toggleTheme);
 document.querySelectorAll('.settings-row input').forEach(inp => inp.addEventListener('change', saveState));
