@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
 <title>Trajet — Vieugy ↔ Genève</title>
 <meta name="theme-color" content="#2a78d6">
-<meta name="apple-mobile-web-app-title" content="Trajet Geneve">
+<meta name="mobile-web-app-capable" content="yes">
 <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.4/chart.umd.min.js"></script>
 <style>
   /* ---- Theme: "sombre premium" — anthracite + accent neon, thème unique (fintech/perf) ---- */
@@ -397,8 +397,24 @@
         </div>
         <div class="settings-group">
           <div class="settings-group-title">Covoiturage — encaissé (réel)</div>
-          <div class="settings-row"><label>Total encaissé à date (€)</label><input type="number" id="p_covoit_encaisse" value="140" step="1"></div>
-          <div class="settings-row"><label>Date de ce relevé</label><input type="date" id="p_covoit_encaisse_date" value="2026-08-09"></div>
+          <p class="muted" style="margin:0 4px 8px;">Ajoute chaque paiement reçu au fur et à mesure — le total "au total" est calculé automatiquement en additionnant ces lignes, il ne peut donc plus être effacé par erreur.</p>
+          <div id="covoitPaymentsList"></div>
+          <div class="settings-row" style="gap:6px;">
+            <input type="date" id="p_covoit_new_date" style="flex:1;text-align:left;width:auto;">
+            <input type="number" id="p_covoit_new_amount" placeholder="Montant €" step="1" style="width:90px;text-align:right;">
+            <button class="add-btn" id="addCovoitPaymentBtn" style="margin:0;width:auto;padding:10px 14px;white-space:nowrap;">+ Ajouter</button>
+          </div>
+        </div>
+        <div class="settings-group">
+          <div class="settings-group-title">Pleins de carburant (réel)</div>
+          <p class="muted" style="margin:0 4px 8px;">Ajoute chaque plein payé — les dépenses "ce mois-ci" utilisent ce coût réel dès qu'un plein est enregistré pour le mois, sinon une estimation au km est utilisée.</p>
+          <div id="fuelFillupsList"></div>
+          <div class="settings-row" style="gap:6px;flex-wrap:wrap;">
+            <select id="p_fuel_new_vehicle" style="flex:1;min-width:100px;text-align:left;width:auto;"></select>
+            <input type="date" id="p_fuel_new_date" style="flex:1;min-width:100px;text-align:left;width:auto;">
+            <input type="number" id="p_fuel_new_amount" placeholder="Montant €" step="1" style="width:90px;text-align:right;">
+            <button class="add-btn" id="addFuelFillupBtn" style="margin:0;width:auto;padding:10px 14px;white-space:nowrap;">+ Ajouter</button>
+          </div>
         </div>
         <div class="settings-group">
           <div class="settings-group-title">Personnalisation</div>
@@ -440,6 +456,98 @@ function getVehicle(id) { return vehicles.find(v => v.id === id); }
 function vehiclePhoto(id) { const v = getVehicle(id); return v ? v.photo : ''; }
 function vehicleLabel(id) { const v = getVehicle(id); return v ? v.label : id; }
 function lldVehicle() { return vehicles.find(v => v.isLLD) || null; }
+
+let covoitPayments = [
+  { date:'2026-08-09', amount:140 },
+];
+function renderCovoitPayments() {
+  const wrap = document.getElementById('covoitPaymentsList');
+  if (!wrap) return;
+  if (covoitPayments.length === 0) {
+    wrap.innerHTML = `<p class="muted" style="margin:0 4px 8px;">Aucun paiement enregistré pour l'instant.</p>`;
+    return;
+  }
+  const sorted = covoitPayments.map((p,i)=>({...p, _i:i})).sort((a,b)=> a.date < b.date ? 1 : -1);
+  wrap.innerHTML = sorted.map(p => `
+    <div class="settings-row">
+      <label>${fmtDateLbl(p.date)}</label>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <b style="color:var(--good);font-variant-numeric:tabular-nums;">${fmtEUR(Number(p.amount)||0)}</b>
+        <button class="del-x" data-delpay="${p._i}">✕</button>
+      </span>
+    </div>
+  `).join('');
+  wrap.querySelectorAll('[data-delpay]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      covoitPayments.splice(+btn.dataset.delpay, 1);
+      renderAll();
+    });
+  });
+}
+document.getElementById('addCovoitPaymentBtn').addEventListener('click', () => {
+  const dateEl = document.getElementById('p_covoit_new_date');
+  const amountEl = document.getElementById('p_covoit_new_amount');
+  const date = dateEl.value || todayISO();
+  const amount = parseFloat(amountEl.value);
+  if (!amount || amount <= 0) { alert('Indique un montant valide.'); return; }
+  covoitPayments.push({ date, amount });
+  dateEl.value = '';
+  amountEl.value = '';
+  renderAll();
+});
+
+let fuelFillups = [];
+function fuelSpentForVehicle(vehId, ym) {
+  return fuelFillups
+    .filter(f => f.vehicle === vehId && (!ym || (f.date && f.date.slice(0,7) === ym)))
+    .reduce((s,f)=>s+(Number(f.amount)||0), 0);
+}
+function renderFuelVehicleSelect() {
+  const sel = document.getElementById('p_fuel_new_vehicle');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = vehicles.map(v => `<option value="${v.id}">${v.label}</option>`).join('');
+  if (vehicles.some(v=>v.id===prev)) sel.value = prev;
+}
+function renderFuelFillups() {
+  renderFuelVehicleSelect();
+  const wrap = document.getElementById('fuelFillupsList');
+  if (!wrap) return;
+  if (fuelFillups.length === 0) {
+    wrap.innerHTML = `<p class="muted" style="margin:0 4px 8px;">Aucun plein enregistré pour l'instant.</p>`;
+    return;
+  }
+  const sorted = fuelFillups.map((f,i)=>({...f, _i:i})).sort((a,b)=> a.date < b.date ? 1 : -1);
+  wrap.innerHTML = sorted.map(f => `
+    <div class="settings-row">
+      <label>${fmtDateLbl(f.date)} · ${vehicleLabel(f.vehicle)}</label>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <b style="color:var(--critical);font-variant-numeric:tabular-nums;">${fmtEUR(Number(f.amount)||0)}</b>
+        <button class="del-x" data-delfuel="${f._i}">✕</button>
+      </span>
+    </div>
+  `).join('');
+  wrap.querySelectorAll('[data-delfuel]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      fuelFillups.splice(+btn.dataset.delfuel, 1);
+      renderAll();
+    });
+  });
+}
+document.getElementById('addFuelFillupBtn').addEventListener('click', () => {
+  const vehEl = document.getElementById('p_fuel_new_vehicle');
+  const dateEl = document.getElementById('p_fuel_new_date');
+  const amountEl = document.getElementById('p_fuel_new_amount');
+  const vehicle = vehEl.value;
+  const date = dateEl.value || todayISO();
+  const amount = parseFloat(amountEl.value);
+  if (!vehicle) { alert('Ajoute d\'abord une voiture dans Mon Garage.'); return; }
+  if (!amount || amount <= 0) { alert('Indique un montant valide.'); return; }
+  fuelFillups.push({ vehicle, date, amount });
+  dateEl.value = '';
+  amountEl.value = '';
+  renderAll();
+});
 const ROUTE_NATIONALE_LBL = 'Nationale Seynod Sud→Allonzier (2,20€)';
 const ROUTES_ALLER = [
   { v:'Autoroute Seynod Sud', ic:'🛣️', key:'ssud' },
@@ -723,7 +831,8 @@ function getParams() {
   return {
     dist: g('p_dist'), distRetour: g('p_dist_retour'), trajetsSem: g('p_trajets_sem'), covoitFallbackPct: g('p_covoit_fallback')/100,
     peageSSA: g('p_peage_ssa'), peageSSR: g('p_peage_ssr'), peageSC: g('p_peage_sc'), peageNationale: g('p_peage_nationale'), covoitEur: g('p_covoit_eur'),
-    covoitEncaisse: g('p_covoit_encaisse'), covoitEncaisseDate: document.getElementById('p_covoit_encaisse_date').value,
+    covoitEncaisse: covoitPayments.reduce((s,p)=>s+(Number(p.amount)||0),0),
+    covoitEncaisseDate: covoitPayments.length ? covoitPayments.slice().sort((a,b)=>a.date<b.date?1:-1)[0].date : null,
     userName: (document.getElementById('p_userName').value || 'Jade').trim() || 'Jade',
   };
 }
@@ -837,7 +946,8 @@ function computeAll() {
       const daysAll = dailyLog.filter(r => r.vehicle === v.id);
       const daysConfirmed = daysAll.filter(r => !r.forecast);
       const kmEstimeJournal = daysConfirmed.length * distAR;
-      const coutTotal = (v.kmFait||0) * eurKm;
+      const fuelReelTotal = fuelSpentForVehicle(v.id, null);
+      const coutTotal = fuelReelTotal > 0 ? fuelReelTotal : (v.kmFait||0) * eurKm;
       const el = document.getElementById('kpis_'+v.id);
       if (!el) return;
       el.innerHTML = [
@@ -851,16 +961,20 @@ function computeAll() {
 
   // --- Profil : récap covoiturage (ce mois-ci) ---
   const nowISO = todayISO();
+  const nowYm = nowISO.slice(0,7);
   const monthRows = monthRowsFor(nowISO);
   const monthConfirmed = monthRows.filter(r => !r.forecast);
   const kmMoisTotal = monthConfirmed.length * distAR;
   let depensesMoisTotal = 0;
+  vehicles.forEach(v => {
+    const n = monthConfirmed.filter(r => r.vehicle === v.id).length;
+    const fuelReel = fuelSpentForVehicle(v.id, nowYm);
+    depensesMoisTotal += fuelReel > 0 ? fuelReel : n*distAR*vehEurKm(v);
+  });
   monthConfirmed.forEach(r => {
-    const veh = getVehicle(r.vehicle);
-    const eurKm = veh ? vehEurKm(veh) : 0;
     const cA = legCostEUR('routeAller', r.routeAller, P, r) || 0;
     const cR = legCostEUR('routeRetour', r.routeRetour, P, r) || 0;
-    depensesMoisTotal += distAR*eurKm + cA + cR;
+    depensesMoisTotal += cA + cR;
   });
   const tripsCovoitMois = monthConfirmed.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0),0);
   const revenuEstimeMois = tripsCovoitMois * P.covoitEur;
@@ -952,8 +1066,11 @@ const STORAGE_KEY = 'trajetVieugyGeneve_v1';
 function saveState() {
   try {
     const params = {};
-    document.querySelectorAll('.settings-row input').forEach(inp => { params[inp.id] = inp.value; });
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ dailyLog, vehicles, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), savedAt: new Date().toISOString() }));
+    document.querySelectorAll('.settings-row input').forEach(inp => {
+      if (inp.id === 'p_covoit_new_date' || inp.id === 'p_covoit_new_amount' || inp.id === 'p_fuel_new_date' || inp.id === 'p_fuel_new_amount') return; // champs de saisie transitoires, pas des reglages
+      params[inp.id] = inp.value;
+    });
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ dailyLog, vehicles, covoitPayments, fuelFillups, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), savedAt: new Date().toISOString() }));
   } catch (e) { console.warn('saveState failed', e); }
 }
 function loadState() {
@@ -963,6 +1080,8 @@ function loadState() {
     const data = JSON.parse(raw);
     if (data.dailyLog && data.dailyLog.length) dailyLog = data.dailyLog;
     if (data.vehicles && data.vehicles.length) vehicles = data.vehicles;
+    if (data.covoitPayments) covoitPayments = data.covoitPayments;
+    if (data.fuelFillups) fuelFillups = data.fuelFillups;
     if (data.params) {
       Object.keys(data.params).forEach(id => {
         const el = document.getElementById(id);
@@ -981,8 +1100,11 @@ function resetState() {
 function exportData() {
   try {
     const params = {};
-    document.querySelectorAll('.settings-row input').forEach(inp => { params[inp.id] = inp.value; });
-    const payload = { dailyLog, vehicles, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), exportedAt: new Date().toISOString() };
+    document.querySelectorAll('.settings-row input').forEach(inp => {
+      if (inp.id === 'p_covoit_new_date' || inp.id === 'p_covoit_new_amount' || inp.id === 'p_fuel_new_date' || inp.id === 'p_fuel_new_amount') return;
+      params[inp.id] = inp.value;
+    });
+    const payload = { dailyLog, vehicles, covoitPayments, fuelFillups, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1013,6 +1135,8 @@ document.getElementById('importFileInput').addEventListener('change', e => {
       if (!confirm("Importer cette sauvegarde va REMPLACER toutes les donnees actuelles sur cet appareil. Continuer ?")) return;
       dailyLog = data.dailyLog;
       vehicles = data.vehicles;
+      if (Array.isArray(data.covoitPayments)) covoitPayments = data.covoitPayments;
+      if (Array.isArray(data.fuelFillups)) fuelFillups = data.fuelFillups;
       if (data.params) {
         Object.keys(data.params).forEach(id => {
           const el = document.getElementById(id);
@@ -1098,10 +1222,10 @@ function renderHeroCards() {
     return `<div class="kpi"><span class="ic">🚗</span><div class="lbl">Km ${v.label} <span class="tag">ce mois-ci</span></div><div class="val">${fmtKM(km)}</div></div>`;
   }).join('');
 
+  const totalTrips = monthConfirmed.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0),0);
   let covoitTxt = 'Aucun trajet confirmé ce mois-ci';
   let covoitCls = '';
   if (monthConfirmed.length > 0) {
-    const totalTrips = monthConfirmed.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0),0);
     const legsPossible = monthConfirmed.length * 2;
     const pct = legsPossible > 0 ? Math.round(100*totalTrips/legsPossible) : 0;
     covoitTxt = pct + '% des trajets ce mois-ci';
@@ -1109,16 +1233,25 @@ function renderHeroCards() {
   }
   const covoitCard = `<div class="kpi"><span class="ic">🤝</span><div class="lbl">Part du covoiturage <span class="tag">ce mois-ci</span></div><div class="val ${covoitCls}">${covoitTxt}</div></div>`;
 
-  document.getElementById('heroKpis').innerHTML = kmCards + covoitCard;
-
   let depensesMois = 0;
+  vehicles.forEach(v => {
+    const n = monthConfirmed.filter(r => r.vehicle === v.id).length;
+    const fuelReel = fuelSpentForVehicle(v.id, ym);
+    depensesMois += fuelReel > 0 ? fuelReel : n*distAR*(v.fuelPrice*v.conso/100);
+  });
   monthConfirmed.forEach(r => {
-    const veh = getVehicle(r.vehicle);
-    const eurKm = veh ? (veh.fuelPrice*veh.conso/100) : 0;
     const cA = legCostEUR('routeAller', r.routeAller, P, r) || 0;
     const cR = legCostEUR('routeRetour', r.routeRetour, P, r) || 0;
-    depensesMois += distAR*eurKm + cA + cR;
+    depensesMois += cA + cR;
   });
+  const revenuCovoitEstime = totalTrips * P.covoitEur;
+  const soldeNet = revenuCovoitEstime - depensesMois;
+  const soldeCls = soldeNet > 0 ? 'good' : (soldeNet < 0 ? 'warn' : '');
+  const soldeSign = soldeNet >= 0 ? '+' : '';
+  const soldeCard = `<div class="kpi"><span class="ic">${soldeNet >= 0 ? '📈' : '📉'}</span><div class="lbl">Solde net (estimé) <span class="tag">ce mois-ci</span></div><div class="val ${soldeCls}">${soldeSign}${fmtEUR(soldeNet)}</div></div>`;
+
+  document.getElementById('heroKpis').innerHTML = kmCards + covoitCard + soldeCard;
+
   let bilanHTML;
   if (depensesMois <= 0) {
     bilanHTML = `<h2>🤝 Bilan covoiturage</h2><p class="muted">Pas encore de dépenses de trajet ce mois-ci.</p>`;
@@ -1268,7 +1401,7 @@ function renderAll() {
   const nameNow = (document.getElementById('p_userName').value || 'Jade').trim() || 'Jade';
   document.getElementById('heroGreet').textContent = `Salut ${nameNow} 👋`;
   renderTodayCard(); renderJournalList(); renderCalendar(); renderHeroCards();
-  renderGarage(); renderProfil();
+  renderGarage(); renderProfil(); renderCovoitPayments(); renderFuelFillups();
   try { computeAll(); } catch (e) { console.warn('computeAll failed (data was still saved):', e); }
 }
 
