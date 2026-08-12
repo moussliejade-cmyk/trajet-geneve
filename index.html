@@ -348,6 +348,23 @@
         <div id="garageList"></div>
 
         <div class="card">
+          <h2>📏 Suivi kilométrique réel</h2>
+          <p class="muted" style="margin:0 0 8px;">Relève le compteur de chaque voiture régulièrement (trajet Genève ou n'importe quel autre trajet) pour comparer les km semaine par semaine entre tes voitures.</p>
+          <div id="kmReadingsList"></div>
+          <div class="settings-row" style="gap:6px;flex-wrap:wrap;">
+            <select id="p_kmread_new_vehicle" style="flex:1;min-width:100px;text-align:left;width:auto;"></select>
+            <input type="date" id="p_kmread_new_date" style="flex:1;min-width:100px;text-align:left;width:auto;">
+            <input type="number" id="p_kmread_new_km" placeholder="Km compteur" step="1" style="width:100px;text-align:right;">
+            <button class="add-btn" id="addKmReadingBtn" style="margin:0;width:auto;padding:10px 14px;white-space:nowrap;">+ Ajouter</button>
+          </div>
+          <button class="primary-btn" id="toggleKmCompareBtn" style="margin:14px 16px 0;width:calc(100% - 32px);">📊 Comparer les km / semaine</button>
+          <div id="kmCompareWrap" style="display:none;margin-top:10px;">
+            <div class="chart-box" style="height:180px;"><canvas id="kmCompareChart"></canvas></div>
+            <div class="legend-row" id="kmCompareLegend"></div>
+          </div>
+        </div>
+
+        <div class="card">
           <h2>💶 Coût net mensuel par option</h2>
           <div class="chart-box"><canvas id="costChart"></canvas></div>
           <div class="legend-row">
@@ -397,7 +414,7 @@
         </div>
         <div class="settings-group">
           <div class="settings-group-title">Covoiturage — encaissé (réel)</div>
-          <p class="muted" style="margin:0 4px 8px;">Ajoute chaque paiement reçu au fur et à mesure — le total "au total" est calculé automatiquement en additionnant ces lignes, il ne peut donc plus être effacé par erreur.</p>
+          <p class="muted" style="margin:0 4px 8px;">Le total "au total" compte automatiquement chaque trajet covoiturage confirmé du Journal (au taux ci-dessus) — inutile de tout saisir à la main. Ajoute une ligne ici seulement pour un versement antérieur au suivi automatique (ex. un forfait reçu avant de commencer à enregistrer les trajets).</p>
           <div id="covoitPaymentsList"></div>
           <div class="settings-row" style="gap:6px;">
             <input type="date" id="p_covoit_new_date" style="flex:1;text-align:left;width:auto;">
@@ -548,6 +565,125 @@ document.getElementById('addFuelFillupBtn').addEventListener('click', () => {
   amountEl.value = '';
   renderAll();
 });
+
+// ---------- Relevés kilométriques & comparaison hebdo entre voitures ----------
+let kmReadings = [];
+function renderKmVehicleSelect() {
+  const sel = document.getElementById('p_kmread_new_vehicle');
+  if (!sel) return;
+  const prev = sel.value;
+  sel.innerHTML = vehicles.map(v => `<option value="${v.id}">${v.label}</option>`).join('');
+  if (vehicles.some(v=>v.id===prev)) sel.value = prev;
+}
+function renderKmReadings() {
+  renderKmVehicleSelect();
+  const wrap = document.getElementById('kmReadingsList');
+  if (!wrap) return;
+  if (kmReadings.length === 0) {
+    wrap.innerHTML = `<p class="muted" style="margin:0 4px 8px;">Aucun relevé enregistré pour l'instant.</p>`;
+    return;
+  }
+  const sorted = kmReadings.map((r,i)=>({...r, _i:i})).sort((a,b)=> a.date < b.date ? 1 : -1);
+  wrap.innerHTML = sorted.map(r => `
+    <div class="settings-row">
+      <label>${fmtDateLbl(r.date)} · ${vehicleLabel(r.vehicle)}</label>
+      <span style="display:flex;align-items:center;gap:8px;">
+        <b style="color:var(--text-primary);font-variant-numeric:tabular-nums;">${fmtKM(Number(r.km)||0)}</b>
+        <button class="del-x" data-delkmread="${r._i}">✕</button>
+      </span>
+    </div>
+  `).join('');
+  wrap.querySelectorAll('[data-delkmread]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      kmReadings.splice(+btn.dataset.delkmread, 1);
+      renderAll();
+    });
+  });
+}
+document.getElementById('addKmReadingBtn').addEventListener('click', () => {
+  const vehEl = document.getElementById('p_kmread_new_vehicle');
+  const dateEl = document.getElementById('p_kmread_new_date');
+  const kmEl = document.getElementById('p_kmread_new_km');
+  const vehicle = vehEl.value;
+  const date = dateEl.value || todayISO();
+  const km = parseFloat(kmEl.value);
+  if (!vehicle) { alert('Ajoute d\'abord une voiture dans Mon Garage.'); return; }
+  if (!km || km <= 0) { alert('Indique un kilométrage valide.'); return; }
+  kmReadings.push({ vehicle, date, km });
+  const veh = getVehicle(vehicle);
+  const latest = kmReadings.filter(r=>r.vehicle===vehicle).slice().sort((a,b)=>a.date<b.date?1:-1)[0];
+  if (veh && latest && latest.km === km && latest.date === date) veh.kmFait = km;
+  dateEl.value = '';
+  kmEl.value = '';
+  renderAll();
+});
+
+function weekStartKey(dateStr) {
+  const d = new Date(dateStr+'T00:00:00');
+  const day = (d.getDay()+6)%7;
+  d.setDate(d.getDate()-day);
+  return d.toISOString().slice(0,10);
+}
+function weekLabelFromKey(key) {
+  const d = new Date(key+'T00:00:00');
+  return 'Sem. ' + d.toLocaleDateString('fr-FR', { day:'2-digit', month:'2-digit' });
+}
+let kmCompareChart;
+function renderKmCompareChart() {
+  const wrap = document.getElementById('kmCompareWrap');
+  const canvas = document.getElementById('kmCompareChart');
+  const legend = document.getElementById('kmCompareLegend');
+  if (!wrap || wrap.style.display === 'none' || !canvas) return;
+  const weekTotals = {};
+  vehicles.forEach(v => {
+    const reads = kmReadings.filter(r=>r.vehicle===v.id).slice().sort((a,b)=>a.date<b.date?-1:1);
+    for (let i=1;i<reads.length;i++) {
+      const delta = Math.max(0, (Number(reads[i].km)||0) - (Number(reads[i-1].km)||0));
+      const wk = weekStartKey(reads[i].date);
+      weekTotals[wk] = weekTotals[wk] || {};
+      weekTotals[wk][v.id] = (weekTotals[wk][v.id]||0) + delta;
+    }
+  });
+  const weeks = Object.keys(weekTotals).sort();
+  if (typeof Chart === 'undefined') {
+    const box = canvas.closest('.chart-box');
+    if (box) box.innerHTML = '<p class="muted" style="padding-top:50px;text-align:center;">Graphique indisponible (connexion internet requise)</p>';
+    if (legend) legend.innerHTML = '';
+    return;
+  }
+  if (kmCompareChart) { kmCompareChart.destroy(); kmCompareChart = null; }
+  if (weeks.length === 0) {
+    if (legend) legend.innerHTML = '<span class="muted">Ajoute au moins 2 relevés par voiture (à des dates différentes) pour voir la comparaison.</span>';
+    return;
+  }
+  const rootStyle = getComputedStyle(document.body);
+  const palette = [rootStyle.getPropertyValue('--series-1').trim(), rootStyle.getPropertyValue('--series-2').trim(), rootStyle.getPropertyValue('--violet').trim(), rootStyle.getPropertyValue('--warning').trim()];
+  const cGrid = rootStyle.getPropertyValue('--grid').trim();
+  const cMuted = rootStyle.getPropertyValue('--text-muted').trim();
+  const datasets = vehicles.map((v,i) => ({
+    label: v.label,
+    data: weeks.map(wk => Math.round((weekTotals[wk] && weekTotals[wk][v.id]) || 0)),
+    backgroundColor: palette[i % palette.length],
+    borderRadius: 6, maxBarThickness: 22,
+  }));
+  kmCompareChart = new Chart(canvas, {
+    type:'bar',
+    data: { labels: weeks.map(weekLabelFromKey), datasets },
+    options: { responsive:true, maintainAspectRatio:false,
+      plugins: { legend:{display:false}, tooltip:{callbacks:{label:ctx=>ctx.dataset.label+': '+ctx.parsed.y+' km'}} },
+      scales: { x:{grid:{display:false},ticks:{color:cMuted,font:{size:9}}},
+                 y:{grid:{color:cGrid},ticks:{color:cMuted,callback:v=>v+'km',font:{size:9}}} } }
+  });
+  if (legend) legend.innerHTML = vehicles.map((v,i)=>`<span><span class="swatch" style="background:${palette[i%palette.length]}"></span>${v.label}</span>`).join('');
+}
+document.getElementById('toggleKmCompareBtn').addEventListener('click', () => {
+  const wrap = document.getElementById('kmCompareWrap');
+  const btn = document.getElementById('toggleKmCompareBtn');
+  const showing = wrap.style.display !== 'none';
+  wrap.style.display = showing ? 'none' : '';
+  btn.textContent = showing ? '📊 Comparer les km / semaine' : '📊 Masquer la comparaison';
+  if (!showing) { try { renderKmCompareChart(); } catch (e) { console.warn('renderKmCompareChart failed', e); } }
+});
 const ROUTE_NATIONALE_LBL = 'Nationale Seynod Sud→Allonzier (2,20€)';
 const ROUTES_ALLER = [
   { v:'Autoroute Seynod Sud', ic:'🛣️', key:'ssud' },
@@ -576,6 +712,16 @@ function legCostEUR(field, v, P, row) {
   }
   return null; // 'autre' sans coût saisi — coût inconnu
 }
+// Un jour peut être "travail" (trajet commute Vieugy↔Genève, routes/péages/covoiturage habituels)
+// ou "loisir" (autre trajet, avec km prévus + coût autoroute saisis directement, sans covoiturage).
+function isTravail(row) { return row.dayType !== 'loisir'; }
+function dayKmDriven(row, distAR) { return isTravail(row) ? distAR : (Number(row.loisirKm)||0); }
+function dayTollCost(row, P) {
+  if (!isTravail(row)) return Number(row.loisirCout)||0;
+  const cA = legCostEUR('routeAller', row.routeAller, P, row) || 0;
+  const cR = legCostEUR('routeRetour', row.routeRetour, P, row) || 0;
+  return cA + cR;
+}
 const COVOIT_OPTS = [0, 1, 2, 3];
 
 const fmtEUR = n => n.toLocaleString('fr-FR', {maximumFractionDigits:0}) + ' €';
@@ -583,10 +729,10 @@ const fmtKM = n => Math.round(n).toLocaleString('fr-FR') + ' km';
 const todayISO = () => new Date().toISOString().slice(0,10);
 
 let dailyLog = [
-  { date: '2026-08-10', vehicle: null, routeAller: 'Autoroute Seynod Sud', routeRetour: 'Autoroute Seynod Sud', covAller: 3, covRetour: 2, forecast: false },
-  { date: '2026-08-11', vehicle: null, routeAller: ROUTE_NATIONALE_LBL, routeRetour: 'Autoroute Seynod Sud', covAller: 1, covRetour: 2, forecast: false },
-  { date: '2026-08-12', vehicle: null, routeAller: ROUTE_NATIONALE_LBL, routeRetour: null, covAller: 1, covRetour: 0, forecast: false },
-  { date: '2026-08-13', vehicle: null, routeAller: null, routeRetour: null, covAller: 2, covRetour: 1, forecast: true },
+  { date: '2026-08-10', vehicle: null, dayType: 'travail', routeAller: 'Autoroute Seynod Sud', routeRetour: 'Autoroute Seynod Sud', covAller: 3, covRetour: 2, forecast: false },
+  { date: '2026-08-11', vehicle: null, dayType: 'travail', routeAller: ROUTE_NATIONALE_LBL, routeRetour: 'Autoroute Seynod Sud', covAller: 1, covRetour: 2, forecast: false },
+  { date: '2026-08-12', vehicle: null, dayType: 'travail', routeAller: ROUTE_NATIONALE_LBL, routeRetour: null, covAller: 1, covRetour: 0, forecast: false },
+  { date: '2026-08-13', vehicle: null, dayType: 'travail', routeAller: null, routeRetour: null, covAller: 2, covRetour: 1, forecast: true },
 ];
 
 function fmtDateLbl(iso) {
@@ -716,9 +862,31 @@ function autreFieldsHTML(row, i, field) {
     </label>
   </div>`;
 }
-function dayCardBody(row, i) {
+function dayTypeRowHTML(current, i) {
+  const opts = [ {v:'travail', ic:'💼', lbl:'Travail'}, {v:'loisir', ic:'🌿', lbl:'Loisir'} ];
+  const cur = current || 'travail';
+  return `<div class="pill-group-lbl">Type de trajet</div>
+  <div class="pill-row">
+    ${opts.map(o => `<span class="pill ${cur===o.v?'active':''}" data-i="${i}" data-f="dayType" data-v="${o.v}">${o.ic} ${o.lbl}</span>`).join('')}
+  </div>`;
+}
+function loisirFieldsHTML(row, i) {
+  const km = row.loisirKm || 0;
+  const cout = row.loisirCout || '';
+  return `<p class="muted" style="margin:2px 4px 6px;">Trajet loisir : indique directement le kilométrage prévu et le coût d'autoroute, sans passer par les routes du commute.</p>
+  <div class="day-cost-row" style="margin-top:6px;">
+    <label style="flex:1;min-width:100px;">Km prévus (trajet complet)
+      <input type="number" class="autre-field" data-i="${i}" data-f="loisirKm" value="${km}" step="1"
+        style="width:100%;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;padding:6px 8px;margin-top:3px;color:var(--text-primary);">
+    </label>
+    <label style="flex:1;min-width:100px;">Coût autoroute (€)
+      <input type="number" class="autre-field" data-i="${i}" data-f="loisirCout" value="${cout}" step="0.10"
+        style="width:100%;background:var(--surface-1);border:1px solid var(--border);border-radius:8px;padding:6px 8px;margin-top:3px;color:var(--text-primary);">
+    </label>
+  </div>`;
+}
+function travailFieldsHTML(row, i) {
   return `
-    ${vehicleCardsHTML(row.vehicle, i)}
     ${routeTraceHTML(row)}
     ${routeRowHTML(row.routeAller, i, 'routeAller', ROUTES_ALLER, 'Route aller')}
     ${row.routeAller === 'Autre' ? autreFieldsHTML(row, i, 'routeAller') : ''}
@@ -727,6 +895,13 @@ function dayCardBody(row, i) {
     ${dayCostHTML(row)}
     ${countRowHTML("Covoitureurs à l'aller", row.covAller, i, 'covAller')}
     ${countRowHTML('Covoitureurs au retour', row.covRetour, i, 'covRetour')}
+  `;
+}
+function dayCardBody(row, i) {
+  return `
+    ${vehicleCardsHTML(row.vehicle, i)}
+    ${dayTypeRowHTML(row.dayType, i)}
+    ${row.dayType === 'loisir' ? loisirFieldsHTML(row, i) : travailFieldsHTML(row, i)}
   `;
 }
 function bindDayInputs(scope) {
@@ -776,12 +951,14 @@ function renderJournalList() {
   dailyLog.forEach((row, i) => {
     const item = document.createElement('div');
     item.className = 'day-compact' + (row.forecast ? ' forecast' : '');
-    const routeShort = `${routeShortLbl(row.routeAller)} → ${routeShortLbl(row.routeRetour)}`;
+    const isLoisir = row.dayType === 'loisir';
+    const routeShort = isLoisir ? `🌿 Loisir · ${fmtKM(row.loisirKm||0)}` : `${routeShortLbl(row.routeAller)} → ${routeShortLbl(row.routeRetour)}`;
+    const subExtra = isLoisir ? '' : ` · ${(row.covAller||0)+(row.covRetour||0)} covoit.`;
     item.innerHTML = `
       <div class="dc-thumb">${row.vehicle ? (vehiclePhoto(row.vehicle) ? `<img src="${vehiclePhoto(row.vehicle)}">` : '🚗') : '❔'}</div>
       <div class="dc-main">
         <div class="dc-date">${fmtDateLbl(row.date)}</div>
-        <div class="dc-sub">${row.vehicle ? vehicleLabel(row.vehicle) : 'véhicule ?'} · ${routeShort} · ${(row.covAller||0)+(row.covRetour||0)} covoit.</div>
+        <div class="dc-sub">${row.vehicle ? vehicleLabel(row.vehicle) : 'véhicule ?'} · ${routeShort}${subExtra}</div>
       </div>
       <div class="dc-badge">${row.forecast?'Prév.':'OK'}</div>
       <button class="del-x" data-del="${i}">✕</button>
@@ -820,19 +997,33 @@ function openDayEditor(i) {
 }
 
 document.getElementById('addDayBtn').addEventListener('click', () => {
-  dailyLog.push({ date: nextDate(), vehicle: null, routeAller: null, routeRetour: null, covAller: 0, covRetour: 0, forecast: false });
+  dailyLog.push({ date: nextDate(), vehicle: null, dayType: 'travail', routeAller: null, routeRetour: null, covAller: 0, covRetour: 0, forecast: false });
   openDayIndex = dailyLog.length - 1;
   renderAll();
 });
 
 // ---------- Params ----------
+function autoCovoitTripsRevenue(covoitEur, sinceDate) {
+  // Revenu covoiturage réel calculé automatiquement à partir des trajets confirmés du Journal
+  // (au taux configuré), pour ne plus dépendre d'une saisie manuelle qui peut être oubliée.
+  const rows = dailyLog.filter(r => !r.forecast && isTravail(r) && (!sinceDate || r.date > sinceDate));
+  const legs = rows.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0), 0);
+  return legs * covoitEur;
+}
 function getParams() {
   const g = id => parseFloat(document.getElementById(id).value);
+  const covoitEur = g('p_covoit_eur');
+  // La saisie manuelle (ledger) sert pour les montants antérieurs au suivi automatique (ex: le
+  // versement forfaitaire initial) ; à partir de la dernière date saisie manuellement, les trajets
+  // confirmés du Journal sont comptés automatiquement au taux configuré pour ne rien oublier.
+  const lastManualDate = covoitPayments.length ? covoitPayments.slice().sort((a,b)=>a.date<b.date?1:-1)[0].date : null;
+  const manualTotal = covoitPayments.reduce((s,p)=>s+(Number(p.amount)||0),0);
+  const autoTotal = autoCovoitTripsRevenue(covoitEur, lastManualDate);
   return {
     dist: g('p_dist'), distRetour: g('p_dist_retour'), trajetsSem: g('p_trajets_sem'), covoitFallbackPct: g('p_covoit_fallback')/100,
-    peageSSA: g('p_peage_ssa'), peageSSR: g('p_peage_ssr'), peageSC: g('p_peage_sc'), peageNationale: g('p_peage_nationale'), covoitEur: g('p_covoit_eur'),
-    covoitEncaisse: covoitPayments.reduce((s,p)=>s+(Number(p.amount)||0),0),
-    covoitEncaisseDate: covoitPayments.length ? covoitPayments.slice().sort((a,b)=>a.date<b.date?1:-1)[0].date : null,
+    peageSSA: g('p_peage_ssa'), peageSSR: g('p_peage_ssr'), peageSC: g('p_peage_sc'), peageNationale: g('p_peage_nationale'), covoitEur,
+    covoitEncaisse: manualTotal + autoTotal,
+    covoitEncaisseDate: lastManualDate,
     userName: (document.getElementById('p_userName').value || 'Jade').trim() || 'Jade',
   };
 }
@@ -851,7 +1042,7 @@ function computeAll() {
   const trajetsMois = P.trajetsSem * semainesMois;
   function vehEurKm(v) { return v.fuelPrice * v.conso / 100; }
 
-  const recentLog = dailyLog.slice(-14);
+  const recentLog = dailyLog.filter(isTravail).slice(-14);
   let covoitPct = P.covoitFallbackPct;
   let covoitSourceTxt = `Estimation manuelle (${Math.round(P.covoitFallbackPct*100)}%) — aucun jour enregistré`;
   if (recentLog.length > 0) {
@@ -945,7 +1136,7 @@ function computeAll() {
     } else {
       const daysAll = dailyLog.filter(r => r.vehicle === v.id);
       const daysConfirmed = daysAll.filter(r => !r.forecast);
-      const kmEstimeJournal = daysConfirmed.length * distAR;
+      const kmEstimeJournal = daysConfirmed.reduce((s,r)=>s+dayKmDriven(r, distAR), 0);
       const fuelReelTotal = fuelSpentForVehicle(v.id, null);
       const coutTotal = fuelReelTotal > 0 ? fuelReelTotal : (v.kmFait||0) * eurKm;
       const el = document.getElementById('kpis_'+v.id);
@@ -964,19 +1155,16 @@ function computeAll() {
   const nowYm = nowISO.slice(0,7);
   const monthRows = monthRowsFor(nowISO);
   const monthConfirmed = monthRows.filter(r => !r.forecast);
-  const kmMoisTotal = monthConfirmed.length * distAR;
+  const kmMoisTotal = monthConfirmed.reduce((s,r)=>s+dayKmDriven(r, distAR), 0);
   let depensesMoisTotal = 0;
   vehicles.forEach(v => {
-    const n = monthConfirmed.filter(r => r.vehicle === v.id).length;
+    const rowsVeh = monthConfirmed.filter(r => r.vehicle === v.id);
+    const kmVeh = rowsVeh.reduce((s,r)=>s+dayKmDriven(r, distAR), 0);
     const fuelReel = fuelSpentForVehicle(v.id, nowYm);
-    depensesMoisTotal += fuelReel > 0 ? fuelReel : n*distAR*vehEurKm(v);
+    depensesMoisTotal += fuelReel > 0 ? fuelReel : kmVeh*vehEurKm(v);
   });
-  monthConfirmed.forEach(r => {
-    const cA = legCostEUR('routeAller', r.routeAller, P, r) || 0;
-    const cR = legCostEUR('routeRetour', r.routeRetour, P, r) || 0;
-    depensesMoisTotal += cA + cR;
-  });
-  const tripsCovoitMois = monthConfirmed.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0),0);
+  monthConfirmed.forEach(r => { depensesMoisTotal += dayTollCost(r, P); });
+  const tripsCovoitMois = monthConfirmed.filter(isTravail).reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0),0);
   const revenuEstimeMois = tripsCovoitMois * P.covoitEur;
   const profilStatsEl = document.getElementById('profilStats');
   if (profilStatsEl) profilStatsEl.innerHTML = [
@@ -991,7 +1179,7 @@ function computeAll() {
   monthConfirmed.forEach(r => {
     const day = parseInt(r.date.slice(8,10), 10);
     const wk = Math.ceil(day/7);
-    weekBuckets[wk] = (weekBuckets[wk]||0) + distAR;
+    weekBuckets[wk] = (weekBuckets[wk]||0) + dayKmDriven(r, distAR);
   });
   const weekLabels = Object.keys(weekBuckets).sort((a,b)=>a-b).map(w=>'Sem. '+w);
   const weekData = Object.keys(weekBuckets).sort((a,b)=>a-b).map(w=>Math.round(weekBuckets[w]));
@@ -1067,10 +1255,10 @@ function saveState() {
   try {
     const params = {};
     document.querySelectorAll('.settings-row input').forEach(inp => {
-      if (inp.id === 'p_covoit_new_date' || inp.id === 'p_covoit_new_amount' || inp.id === 'p_fuel_new_date' || inp.id === 'p_fuel_new_amount') return; // champs de saisie transitoires, pas des reglages
+      if (inp.id === 'p_covoit_new_date' || inp.id === 'p_covoit_new_amount' || inp.id === 'p_fuel_new_date' || inp.id === 'p_fuel_new_amount' || inp.id === 'p_kmread_new_date' || inp.id === 'p_kmread_new_km') return; // champs de saisie transitoires, pas des reglages
       params[inp.id] = inp.value;
     });
-    localStorage.setItem(STORAGE_KEY, JSON.stringify({ dailyLog, vehicles, covoitPayments, fuelFillups, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), savedAt: new Date().toISOString() }));
+    localStorage.setItem(STORAGE_KEY, JSON.stringify({ dailyLog, vehicles, covoitPayments, fuelFillups, kmReadings, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), savedAt: new Date().toISOString() }));
   } catch (e) { console.warn('saveState failed', e); }
 }
 function loadState() {
@@ -1082,6 +1270,7 @@ function loadState() {
     if (data.vehicles && data.vehicles.length) vehicles = data.vehicles;
     if (data.covoitPayments) covoitPayments = data.covoitPayments;
     if (data.fuelFillups) fuelFillups = data.fuelFillups;
+    if (data.kmReadings) kmReadings = data.kmReadings;
     if (data.params) {
       Object.keys(data.params).forEach(id => {
         const el = document.getElementById(id);
@@ -1101,10 +1290,10 @@ function exportData() {
   try {
     const params = {};
     document.querySelectorAll('.settings-row input').forEach(inp => {
-      if (inp.id === 'p_covoit_new_date' || inp.id === 'p_covoit_new_amount' || inp.id === 'p_fuel_new_date' || inp.id === 'p_fuel_new_amount') return;
+      if (inp.id === 'p_covoit_new_date' || inp.id === 'p_covoit_new_amount' || inp.id === 'p_fuel_new_date' || inp.id === 'p_fuel_new_amount' || inp.id === 'p_kmread_new_date' || inp.id === 'p_kmread_new_km') return;
       params[inp.id] = inp.value;
     });
-    const payload = { dailyLog, vehicles, covoitPayments, fuelFillups, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), exportedAt: new Date().toISOString() };
+    const payload = { dailyLog, vehicles, covoitPayments, fuelFillups, kmReadings, params, profilePhoto: (typeof profilePhoto !== 'undefined' ? profilePhoto : ''), exportedAt: new Date().toISOString() };
     const blob = new Blob([JSON.stringify(payload, null, 2)], { type: 'application/json' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
@@ -1137,6 +1326,7 @@ document.getElementById('importFileInput').addEventListener('change', e => {
       vehicles = data.vehicles;
       if (Array.isArray(data.covoitPayments)) covoitPayments = data.covoitPayments;
       if (Array.isArray(data.fuelFillups)) fuelFillups = data.fuelFillups;
+      if (Array.isArray(data.kmReadings)) kmReadings = data.kmReadings;
       if (data.params) {
         Object.keys(data.params).forEach(id => {
           const el = document.getElementById(id);
@@ -1217,16 +1407,17 @@ function renderHeroCards() {
   const monthConfirmed = monthRows.filter(r => !r.forecast);
 
   const kmCards = vehicles.map(v => {
-    const n = monthConfirmed.filter(r => r.vehicle === v.id).length;
-    const km = n * distAR;
+    const rowsVeh = monthConfirmed.filter(r => r.vehicle === v.id);
+    const km = rowsVeh.reduce((s,r)=>s+dayKmDriven(r, distAR), 0);
     return `<div class="kpi"><span class="ic">🚗</span><div class="lbl">Km ${v.label} <span class="tag">ce mois-ci</span></div><div class="val">${fmtKM(km)}</div></div>`;
   }).join('');
 
-  const totalTrips = monthConfirmed.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0),0);
+  const monthConfirmedTravail = monthConfirmed.filter(isTravail);
+  const totalTrips = monthConfirmedTravail.reduce((s,r)=>s+((r.covAller>0)?1:0)+((r.covRetour>0)?1:0),0);
   let covoitTxt = 'Aucun trajet confirmé ce mois-ci';
   let covoitCls = '';
-  if (monthConfirmed.length > 0) {
-    const legsPossible = monthConfirmed.length * 2;
+  if (monthConfirmedTravail.length > 0) {
+    const legsPossible = monthConfirmedTravail.length * 2;
     const pct = legsPossible > 0 ? Math.round(100*totalTrips/legsPossible) : 0;
     covoitTxt = pct + '% des trajets ce mois-ci';
     covoitCls = pct >= 60 ? 'good' : (pct < 30 ? 'warn' : '');
@@ -1235,15 +1426,12 @@ function renderHeroCards() {
 
   let depensesMois = 0;
   vehicles.forEach(v => {
-    const n = monthConfirmed.filter(r => r.vehicle === v.id).length;
+    const rowsVeh = monthConfirmed.filter(r => r.vehicle === v.id);
+    const kmVeh = rowsVeh.reduce((s,r)=>s+dayKmDriven(r, distAR), 0);
     const fuelReel = fuelSpentForVehicle(v.id, ym);
-    depensesMois += fuelReel > 0 ? fuelReel : n*distAR*(v.fuelPrice*v.conso/100);
+    depensesMois += fuelReel > 0 ? fuelReel : kmVeh*(v.fuelPrice*v.conso/100);
   });
-  monthConfirmed.forEach(r => {
-    const cA = legCostEUR('routeAller', r.routeAller, P, r) || 0;
-    const cR = legCostEUR('routeRetour', r.routeRetour, P, r) || 0;
-    depensesMois += cA + cR;
-  });
+  monthConfirmed.forEach(r => { depensesMois += dayTollCost(r, P); });
   const revenuCovoitEstime = totalTrips * P.covoitEur;
   const soldeNet = revenuCovoitEstime - depensesMois;
   const soldeCls = soldeNet > 0 ? 'good' : (soldeNet < 0 ? 'warn' : '');
@@ -1401,8 +1589,9 @@ function renderAll() {
   const nameNow = (document.getElementById('p_userName').value || 'Jade').trim() || 'Jade';
   document.getElementById('heroGreet').textContent = `Salut ${nameNow} 👋`;
   renderTodayCard(); renderJournalList(); renderCalendar(); renderHeroCards();
-  renderGarage(); renderProfil(); renderCovoitPayments(); renderFuelFillups();
+  renderGarage(); renderProfil(); renderCovoitPayments(); renderFuelFillups(); renderKmReadings();
   try { computeAll(); } catch (e) { console.warn('computeAll failed (data was still saved):', e); }
+  try { renderKmCompareChart(); } catch (e) { console.warn('renderKmCompareChart failed', e); }
 }
 
 document.getElementById('recalcBtn').addEventListener('click', renderAll);
